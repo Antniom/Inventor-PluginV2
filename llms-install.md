@@ -1,70 +1,83 @@
-# Installation guide for AI agents
+# Installation Guide for AI Agents & Autonomous Workflows
 
-Step-by-step setup of the inventor-mcp server. Follow in order.
+This document is an automated installation runbook for AI coding assistants (Antigravity, Claude Code, Cline, Cursor). Follow the steps in sequence.
 
-## Prerequisites check
+## 1. Prerequisites Check
 
-1. **Windows only** — this server drives Autodesk Inventor through COM; it cannot work on macOS/Linux.
-2. **Autodesk Inventor** must be installed (2026 recommended; 2024/2025 may work with enum differences). Verify:
+1. **Operating System:** Windows 10/11 (Autodesk Inventor runs exclusively on Windows).
+2. **CAD Software:** Autodesk Inventor Professional 2026 or 2027 installed. Verify:
    ```powershell
    Test-Path "C:\Program Files\Autodesk"
    ```
-3. **Python 3.12+** on PATH:
+3. **Python Environment:** Python 3.12+ available on PATH:
    ```powershell
    python --version
    ```
 
-## Setup steps
+## 2. Core Architecture: Plugin Structure
 
-1. Clone the repository to a stable location (avoid paths that may be deleted):
-   ```powershell
-   git clone https://github.com/NeonGlay/inventor-mcp.git
-   cd inventor-mcp
-   ```
+**Note:** This package is an **Antigravity Plugin**, not a standalone MCP server. The 5 bundled skills are required and non-optional — they enforce critical CAD doctrines (datum grounding, subassembly rigidity, millimeter units boundary, and PosRep mechanism controls).
 
-2. Install Python dependencies:
-   ```powershell
-   pip install "mcp[cli]" pywin32
-   ```
+```
+plugin.json          -> Registers MCP server ('inventor') and all 5 skills
+pyproject.toml       -> Defines python package with mcp>=2.3.0 and pywin32
+skills/              -> 5 Required domain skills
+src/                 -> FastMCP server and Inventor COM abstraction wrapper
+```
 
-3. Register the MCP server in the client's MCP configuration. The server uses
-   **stdio** transport. Configuration (adjust `cwd` to the actual clone path):
+## 3. Setup Steps
+
+### Step 3.1: Clone the Repository
+Clone to a persistent directory:
+```powershell
+git clone https://github.com/Antniom/LMInventor-plugin.git C:\Plugins\inventor
+cd C:\Plugins\inventor
+```
+
+### Step 3.2: Install Python Dependencies
+Install the package in editable mode:
+```powershell
+pip install -e .
+```
+*(Dependencies: `mcp[cli]>=2.3.0`, `pywin32>=306`)*
+
+### Step 3.3: Client Configuration
+
+#### Option A: Antigravity / Gemini CLI
+If cloning into the Antigravity plugins directory (`%USERPROFILE%\.gemini\config\plugins\inventor`), `plugin.json` automatically activates the MCP server and all 5 skills with zero extra configuration.
+
+#### Option B: Claude Code / Cline / Cursor
+1. Add the MCP server to your client configuration (`.mcp.json` or equivalent):
    ```json
    {
      "mcpServers": {
        "inventor": {
          "command": "python",
          "args": ["-m", "src.server"],
-         "cwd": "C:/path/to/inventor-mcp"
+         "cwd": "C:/Plugins/inventor"
        }
      }
    }
    ```
-   - Claude Code: add to `.mcp.json` in the project root
-   - Cline: add to `cline_mcp_settings.json`
-   - Claude Desktop: add to `claude_desktop_config.json`
+2. Copy the 5 skills to your client's skills directory:
+   ```powershell
+   Copy-Item -Recurse C:\Plugins\inventor\skills\* "$env:USERPROFILE\.claude\skills\"
+   ```
 
-4. Verify: restart the MCP client, then start Autodesk Inventor (the server
-   connects to a **running** Inventor instance). Call the `connect` tool —
-   expected response: `Connected to running Inventor 2026`.
+## 4. Verification Smoke Test
 
-## Smoke test
+1. Launch Autodesk Inventor.
+2. In the AI client chat, run:
+   - `connect` -> Should return `Connected to running Inventor ...`
+   - `status` -> Should report connection and document metadata
+   - `create_part` with `name="SmokeTest"` -> Generates empty `.ipt`
+   - `inspect` -> Snapshot of topology and volume
 
-Ask the agent to run:
-1. `connect` → should report the Inventor version
-2. `create_part` with `template="metric"` → creates an empty part
-3. `create_sketch` with `plane="XY"` → `draw_circle` (diameter=50) → `extrude` (distance=10)
-4. `inspect` → should show one extrusion, volume ≈ 19 635 mm³
+## 5. Troubleshooting & Invariants
 
-## Common issues
-
-- **`Cannot connect to Inventor`** — Inventor isn't running. Start it first (the
-  server attaches to the active instance; it can also launch one, but attaching
-  is more reliable).
-- **`KeyError: '_dispobj_'`** — a stale `gen_py` COM cache. Fix:
+- **Stale COM cache:** If `KeyError: '_dispobj_'` or COM dispatch errors occur, clear the cache:
   ```powershell
   Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Temp\gen_py"
   ```
-- **Unicode errors in console scripts** — run Python with `-X utf8` on Windows.
-- All tool dimensions are **millimeters**; Inventor internally uses centimeters —
-  the server converts automatically.
+- **Units Boundary:** All MCP tool parameters expect **millimeters** for linear dimensions and **degrees** for angles. Internal conversions to cm/rad are performed automatically.
+- **Process Supervisor:** If background headless processes accumulate, call `supervisor_clean_processes(confirm=False)` to list candidates, then `confirm=True, target_pids=[...]` to terminate.

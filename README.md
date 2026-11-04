@@ -1,102 +1,145 @@
-# inventor-mcp
+# Autodesk Inventor AI Studio Plugin (v2.0.0)
 
-**MCP server for parametric 3D modeling in Autodesk Inventor — drive Inventor with Claude (or any MCP client) in natural language.**
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![MCP SDK 2.3.0](https://img.shields.io/badge/MCP%20SDK-2.3.0-green.svg)](https://github.com/modelcontextprotocol/python-sdk)
+[![Autodesk Inventor 2026/2027](https://img.shields.io/badge/Autodesk%20Inventor-2026%20%7C%202027-orange.svg)](https://www.autodesk.com/products/inventor/overview)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Build real parametric parts — flanges, shafts, nuts, brackets, sheet-metal enclosures — by talking to an AI assistant. The server wraps Inventor's COM API with high-level, millimeter-based tools and ships with battle-tested knowledge of Inventor 2026 API quirks that aren't documented anywhere else.
+> **Complete Antigravity & Agentic CAD Plugin for Autodesk Inventor Professional**  
+> **Author:** Antonio Coelho  
+> **Repository:** [https://github.com/Antniom/LMInventor-plugin](https://github.com/Antniom/LMInventor-plugin)
+
+The **Autodesk Inventor AI Studio Plugin** is a unified, first-class agentic CAD plugin for AI coding assistants and autonomous engineering agents (Antigravity, Claude Code, Cline, Cursor). It combines a high-performance **49-tool Model Context Protocol (MCP) server** with **5 specialized Antigravity CAD skills** into an integrated engineering suite.
+
+---
+
+## ⚠️ Important: This is a Full Plugin, Not Just an MCP Server
+
+Unlike raw MCP servers that only expose tool endpoints without behavioral knowledge, this package is a **first-class Antigravity Plugin** (`plugin.json`). 
+
+**The 5 bundled skills are essential, required components of the system.** They provide the engineering doctrine, geometric reasoning, and COM API quirk mitigation that prevent AI models from breaking CAD assemblies, causing over-constrained deadlocks, or misinterpreting units.
 
 ```
-You:    "Build a DIN 934 M16 hex nut with proper conical chamfers"
-Claude: creates sketch → hexagon → extrude → tapped M16×2 hole →
-        revolve-cut chamfers → done. Fully parametric, dimensioned sketches.
+LMInventor-plugin/
+├── plugin.json                 # Antigravity Plugin Manifest (MCP Server + 5 Skills)
+├── pyproject.toml              # Modern Python packaging (mcp>=2.3.0, pywin32)
+├── inventor_mcp_server.py      # Standalone launcher with sys.path resolution
+├── src/
+│   ├── server.py               # FastMCP Server: 49 tools, 3 dynamic resources, prompts
+│   └── inventor_api.py         # Robust COM API abstraction layer (mm units, topology)
+├── skills/                     # 5 Non-Optional Antigravity Domain Skills:
+│   ├── inventor-modeling/      # Parametric 3D parts, sketches, features, sheet metal
+│   ├── inventor-assemblies/    # Assembly architecture, datums, rigidity, constraints
+│   ├── inventor-kinematics/    # PosReps, mechanism travel limits, motion driving, joints
+│   ├── inventor-diagnostics/   # Process supervisor, orphan cleanup, rebuild diagnostics
+│   └── inventor-din-parts/     # Parametric DIN/ISO mechanical hardware generation
+└── docs/                       # Verification bundles and API notes
 ```
 
-## Features
+---
 
-- **49 MCP tools**: complete 3D parametric modeling (`.ipt`) and assembly kinematics (`.iam`) suite: sketching, extrude/revolve, native hole features (drilled / tapped / counterbore), fillets, chamfers, circular patterns, sheet metal (Face / Flange / Cut with Flat Pattern support), parameters, top-down assembly constraints (Mate, Flush, Angle, Insert), Positional Representations (`PosReps`), on-demand native joints, subassembly rigidity enforcement, kinematic motion simulation, material appearance overrides, camera showcase rendering, and safe process supervision
-- **3 Dynamic MCP Resources & Prompts** — real-time kinematics tree (`inventor://assembly/kinematics`), Positional Representations (`inventor://assembly/representations`), and status inspection (`inventor://status`), plus built-in prompt templates (`audit_assembly`)
-- **`execute_python` power tool** — run arbitrary Python against the live COM connection with a persistent namespace (escape hatch for anything not covered by dedicated tools)
-- **Auto-reporting** — every feature operation returns a volume/topology delta (`Hole1 | V 23497 (-503 mm³) | F7 E14`), so the AI can self-verify each step
-- **Transactions** — wrap multi-step builds, roll back everything with one call
-- **Hot reload** — edit the API wrapper and reload without restarting the MCP client
-- **Topology helpers** — find edges/faces by coordinates instead of guessing indices
-- **Parametric discipline** — projected origin points, symmetry constraints, dimensioned sketches that survive parameter changes
+## 🌟 Capabilities & Features
 
-## Requirements
+### 1. 49 Native MCP Tools
+- **Parametric 3D Modeling (`.ipt`)**: Fully constrained 2D sketching, boss/cut extrusions, revolves, native hole wizard (clearance, tapped, counterbore, countersink), fillets, chamfers, and circular patterns.
+- **Sheet Metal Modeling**: Sheet metal faces, flanges with automatic radius/relief calculations, cuts, and flat pattern exports.
+- **Assembly Architecture (`.iam`)**: Bottom-up component insertion, declarative occurrence transformations, coordinate reference planes, and stationary datum locking.
+- **Assembly Constraints & Travel Limits**: Standard Mate, Flush, Angle, and Insert constraints with range-of-motion travel limits (including negative strokes for drawer slides and undirected solution angles).
+- **Positional Representations (`PosReps`)**: Creation, activation, and constraint overrides for kinematic maximum travel positions (`[Primary]`, `Porta_Aberta_Max`, `Gaveta_Aberta_Max`, `Posicao_Maxima`).
+- **Native Assembly Joints (On-Demand)**: Rotational and slider joints with angular and linear limits. Automatically snapshots and restores stationary occurrence `Grounded` states.
+- **Subassembly Internal Rigidity**: Single-pass $O(N + M)$ relationship scanner that safely grounds unconstrained internal parts to origin while preserving dynamic mechanisms via `exclude_keywords`.
+- **Dynamic Motion Driving**: Multi-step kinematic motion interpolation for constraint stroke verification.
+- **Showcase Perspective Rendering**: High-resolution viewport capture (1280×720, 1920×1080) with explicit camera positioning, returning native MCP `Image` content blocks.
+- **Safe Process Supervisor**: Anti-deadlock process auditor that safeguards against orphan headless background instances with strict startup grace periods and explicit PID confirmation.
+- **`execute_python` Power Tool**: Persistent interactive Python execution environment for deep custom COM automation.
 
-- Windows with **Autodesk Inventor** (developed and tested on Inventor 2026; older versions may need enum adjustments — see [docs/inventor-api-notes.md](docs/inventor-api-notes.md))
+### 2. 3 Dynamic MCP Resources & Prompts
+- `inventor://status`: Real-time connection status, active document metadata, units, and software version.
+- `inventor://assembly/kinematics`: Live assembly kinematic tree, occurrence hierarchy, constraint health statuses, and free degrees of freedom.
+- `inventor://assembly/representations`: Active and available Positional Representations in the active assembly.
+- `audit_assembly` Prompt: Automated prompt guiding agents to audit assembly datums, internal rigidity, and mechanism states.
+
+### 3. The 5 Core CAD Skills
+
+| Skill | Directory | Core Doctrine & Responsibility |
+| :--- | :--- | :--- |
+| **`inventor-modeling`** | [`skills/inventor-modeling/`](skills/inventor-modeling/) | Enforces parametric sketch discipline, origin alignment, dimensioned constraints, topological face/edge selection, and sheet metal rules. |
+| **`inventor-assemblies`** | [`skills/inventor-assemblies/`](skills/inventor-assemblies/) | Enforces stationary datum grounding, coordinate datum alignment, and mandatory subassembly internal rigidity before insertion. |
+| **`inventor-kinematics`** | [`skills/inventor-kinematics/`](skills/inventor-kinematics/) | Enforces mechanism doctrine: standard constraints paired with Positional Representations by default; native joints strictly on-demand. |
+| **`inventor-diagnostics`** | [`skills/inventor-diagnostics/`](skills/inventor-diagnostics/) | Manages orphan process supervisor guardrails, COM threading invariants, and FeatureManager rebuild error recovery. |
+| **`inventor-din-parts`** | [`skills/inventor-din-parts/`](skills/inventor-din-parts/) | Generates standard DIN/ISO fasteners from scratch using exact metric engineering tables (DIN 934, DIN 933, DIN 125, DIN 2573). |
+
+---
+
+## 📐 Core Engineering Doctrines Enforced
+
+1. **Units Boundary Invariant:**
+   The MCP tool interface strictly accepts millimeters (`offset_mm`, `min_limit`, `max_limit`) and degrees (`angle_deg`). Conversions to Inventor COM internal units ($d_{\text{cm}} = d_{\text{mm}} / 10.0$, $\theta_{\text{rad}} = \theta_{\text{deg}} \times \pi / 180.0$) are performed automatically at the tool boundary.
+2. **Mechanism Kinematics (Constraints + PosReps First):**
+   Standard constraints paired with Positional Representations are the default standard for CAD mechanisms. Native joints (`add_assembly_joint`) are reserved for explicit on-demand physics verification.
+3. **Subassembly Internal Rigidity:**
+   Subassembly internal parts must be grounded relative to their subassembly origin (`manage_subassembly_kinematics(action="enforce_rigidity")`) before insertion into a parent assembly to prevent components flying apart during interaction.
+4. **Zero False Kills Supervisor:**
+   The process supervisor defaults to a safe dry-run (`confirm=False`). When terminating background orphans (`confirm=True`), explicit candidate PIDs (`target_pids=[...]`) copied from the dry-run inspection are strictly required, and young instances (< 45 seconds) are protected from termination.
+
+---
+
+## 🚀 Installation & Setup
+
+### Requirements
+- **Windows 10 / 11**
+- **Autodesk Inventor Professional 2026 or 2027**
 - **Python 3.12+**
-- `pip install "mcp[cli]" pywin32`
+- **Model Context Protocol Python SDK (`mcp >= 2.3.0`)** and `pywin32 >= 306`
 
-## Installation
+### Option A: Install as an Antigravity Plugin (Recommended)
+Clone directly into your Antigravity plugins directory:
+```powershell
+cd "$env:USERPROFILE\.gemini\config\plugins"
+git clone https://github.com/Antniom/LMInventor-plugin.git inventor
+cd inventor
+pip install -e .
+```
+Antigravity automatically discovers `plugin.json` and activates the MCP server and all 5 CAD skills simultaneously.
 
-1. Clone this repository:
+### Option B: Standalone MCP Client Setup (Claude Code / Cline / Cursor)
+1. Clone the repository:
+   ```powershell
+   git clone https://github.com/Antniom/LMInventor-plugin.git C:\Plugins\inventor
+   cd C:\Plugins\inventor
+   pip install -e .
    ```
-   git clone https://github.com/NeonGlay/inventor-mcp.git
-   ```
-
-2. Install dependencies:
-   ```
-   pip install "mcp[cli]" pywin32
-   ```
-
-3. Register the server with your MCP client. For Claude Code, add to `.mcp.json` in your project root (see `.mcp.json.example`):
+2. Add to your client's `.mcp.json` or MCP configuration:
    ```json
    {
      "mcpServers": {
        "inventor": {
          "command": "python",
          "args": ["-m", "src.server"],
-         "cwd": "C:/path/to/inventor-mcp"
+         "cwd": "C:/Plugins/inventor"
        }
      }
    }
    ```
+3. Copy or symlink the 5 skills to your agent's skills directory:
+   ```powershell
+   # For Claude Code:
+   Copy-Item -Recurse skills\* "$env:USERPROFILE\.claude\skills\"
+   ```
 
-4. Start Inventor, then ask your AI assistant to build something.
+---
 
-> **Do NOT use `win32com.client.gencache.EnsureDispatch`** in your own scripts against the same Python install — the generated `gen_py` cache breaks `GetActiveObject`. If it happens: delete `%LOCALAPPDATA%\Temp\gen_py`. See the API notes for the full story.
+## 🔬 Empirical Verification
 
-## Skills (optional, recommended)
+This plugin suite has been rigorously tested against live CAD geometry on **Autodesk Inventor Professional 2027.1** and verified via an official MCP Python SDK `ClientSession`:
+- **MCP 2.3.0 Conformance:** Fully compatible with `MCPServer` in `mcp.server.mcpserver`.
+- **Live Travel Limits:** Verified on negative stroke Drawer Flush ($-220.0 \text{ mm} \le \text{offset} \le 0.0 \text{ mm}$) and Hinge Angle ($0^\circ \to 115^\circ$, `kUndirectedSolution = 78594`).
+- **Native Joint Grounding:** Verified automatic restoration of `occ.Grounded = True` post-joint insertion.
+- **Showcase Viewport Renders:** Pixel-verified using PIL (PNG format, 1280×720 RGB, non-blank render).
 
-The `skills/` directory contains two [Agent Skills](https://code.claude.com/docs/en/skills) that teach Claude the workflow and the Inventor 2026 API quirks:
+Complete empirical logs and verification matrices are available in [docs/inventor_mcp_review_bundle.md](docs/inventor_mcp_review_bundle.md).
 
-- **inventor-modeling** — core patterns: units, sketch discipline, hole placement, sheet metal, diagnostic verification, common failure modes
-- **inventor-din-parts** — parametric recipes for DIN/ISO standard parts (hex nuts DIN 934, bolts DIN 933, washers DIN 125, flanges DIN 2573) with dimension tables
+---
 
-Install by copying into your skills directory:
-```
-cp -r skills/inventor-modeling ~/.claude/skills/
-cp -r skills/inventor-din-parts ~/.claude/skills/
-```
-
-## Why this exists
-
-Inventor's COM API documentation is wrong or silent about many things in recent versions. This project encodes empirically verified knowledge:
-
-- Correct Inventor 2026 enum values (`kPartDocumentObject = 12290`, dimension orientation `19201/19202/19203`, …)
-- `ChamferFeatures.AddUsingDistance(EdgeCollection, d)` — the 2026 replacement for the removed `CreateChamferDefinition`
-- Sheet-metal `FlangeDefinition`: the Distance argument is **silently ignored**; the real height is set via `feature.Definition.HeightExtent.Distance.Expression` (and the angle is in radians — pass `90` and you get 5156°)
-- `CreateLinearPlacementDefinition` requires a `BiasPoint` argument that dynamic dispatch won't tell you about
-- Edge indices renumber after every feature; fillets shift adjacent edges
-- …and more in [docs/inventor-api-notes.md](docs/inventor-api-notes.md)
-
-## Architecture
-
-```
-src/server.py        FastMCP server — tool definitions (stdio transport)
-src/inventor_api.py  InventorConnection — COM wrapper, all geometry logic (mm units)
-skills/              Agent Skills for Claude
-docs/                Hard-won API knowledge
-```
-
-## Contributing
-
-Contributions welcome! Especially valuable:
-- Testing on Inventor 2024/2025 (enum values may differ — please report)
-- Assembly (IAM) and drawing (IDW) support
-- More DIN/ISO part recipes
-- Bug reports with the exact COM error and Inventor version
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+## 📄 License
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
