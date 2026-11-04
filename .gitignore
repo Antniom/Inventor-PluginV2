@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+*.ipt
+*.iam
+*.idw
+OldVersions/
+gen_py/
+SUBMISSION_KIT.md

@@ -1,0 +1,23 @@
+[project]
+name = "inventor-mcp-server"
+version = "2.0.0"
+description = "MCP server for Autodesk Inventor 2026/2027 parametric modeling and assembly kinematics (49 tools)"
+authors = [
+    { name = "Antonio Coelho", email = "2023137460@my.ipleiria.pt" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=2.3.0",
+    "pywin32>=306",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[project.scripts]
+inventor-mcp = "src.server:main"

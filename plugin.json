@@ -1,0 +1,23 @@
+{
+  "name": "inventor-plugin",
+  "displayName": "Autodesk Inventor AI Studio",
+  "version": "2.0.0",
+  "description": "Enterprise Autodesk Inventor Professional 2026/2027 Automation Suite: Parametric Parts, Top-Down Assemblies, Positional Representations (PosReps), Kinematics, and Showcase Rendering (49 MCP tools).",
+  "author": "Antonio Coelho",
+  "skills": [
+    "skills/inventor-modeling",
+    "skills/inventor-assemblies",
+    "skills/inventor-kinematics",
+    "skills/inventor-diagnostics",
+    "skills/inventor-din-parts"
+  ],
+  "mcpServers": {
+    "inventor": {
+      "command": "python",
+      "args": [
+        "-m",
+        "src.server"
+      ]
+    }
+  }
+}
