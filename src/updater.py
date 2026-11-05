@@ -389,9 +389,19 @@ def verify_installation(plugin_root: str) -> tuple[bool, str]:
     # 2. Subprocess import check (isolated from current process)
     env = dict(os.environ)
     env["INVENTOR_MCP_AUTOUPDATE"] = "off"  # Avoid recursive check during verification
+    # On Windows, explicitly verify that the required COM dependency pywin32 is present
+    verify_script = (
+        "import sys\n"
+        "if sys.platform == 'win32':\n"
+        "    try:\n"
+        "        import win32com.client, pythoncom\n"
+        "    except ImportError as e:\n"
+        "        raise ImportError(f'Missing required pywin32 dependency: {e}')\n"
+        "import src.server\n"
+    )
     try:
         res = subprocess.run(
-            [sys.executable, "-c", "import src.server"],
+            [sys.executable, "-c", verify_script],
             cwd=plugin_root,
             capture_output=True,
             text=True,
@@ -401,7 +411,7 @@ def verify_installation(plugin_root: str) -> tuple[bool, str]:
         )
         if res.returncode != 0:
             err = res.stderr.strip() or res.stdout.strip() or f"exit code {res.returncode}"
-            return False, f"Subprocess import of src.server failed: {err}"
+            return False, f"Subprocess import verification failed: {err}"
     except Exception as e:
         return False, f"Subprocess verification failed to execute: {e}"
 
@@ -566,15 +576,28 @@ def update_plugin(
                 "reason": "Authentication token required to download zipball for private repository.",
             }
 
-        # Create temporary backup directory of the entire plugin folder
+        # Create temporary backup directory of the plugin folder (skipping heavy CAD/media scratch files)
         backup_dir = tempfile.mkdtemp(prefix="inventor_mcp_backup_")
+        ignored_exts = (
+            ".ipt", ".iam", ".idw", ".dwg", ".step", ".stp", ".sat",
+            ".png", ".jpg", ".jpeg", ".zip", ".log", ".tmp",
+        )
+        ignored_names = {
+            ".git", "__pycache__", ".pytest_cache", ".gemini", "OldVersions", "gen_py",
+        }
+        cad_ignore_filter = shutil.ignore_patterns(
+            "*.ipt", "*.iam", "*.idw", "*.dwg", "*.step", "*.stp", "*.sat",
+            "*.png", "*.jpg", "*.jpeg", "*.zip", "*.log", "*.tmp",
+            "OldVersions", "gen_py", "__pycache__", ".pytest_cache",
+        )
+
         for item in os.listdir(root):
-            if item in (".git", "__pycache__", ".pytest_cache", ".gemini"):
+            if item in ignored_names or item.lower().endswith(ignored_exts):
                 continue
             src_item = os.path.join(root, item)
             dst_item = os.path.join(backup_dir, item)
             if os.path.isdir(src_item):
-                shutil.copytree(src_item, dst_item)
+                shutil.copytree(src_item, dst_item, ignore=cad_ignore_filter)
             elif os.path.isfile(src_item):
                 shutil.copy2(src_item, dst_item)
 

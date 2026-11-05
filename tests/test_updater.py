@@ -564,3 +564,71 @@ def test_reload_api_refuses_when_restart_required(clean_env, monkeypatch):
     assert "reloaded" in msg_ok
 
 
+def test_connect_raises_when_pywin32_missing(monkeypatch):
+    """connect() must raise an informative RuntimeError if pywin32 is not installed."""
+    from src import inventor_api
+    monkeypatch.setattr(inventor_api, "win32com", None)
+    monkeypatch.setattr(inventor_api, "pythoncom", None)
+    
+    conn = inventor_api.InventorConnection()
+    with pytest.raises(RuntimeError) as exc_info:
+        conn.connect()
+    assert "pywin32 is not installed" in str(exc_info.value)
+    assert "pip install pywin32" in str(exc_info.value)
+
+
+def test_zip_backup_ignores_large_cad_scratch_files(clean_env, tmp_path, monkeypatch):
+    """Zip update backup must skip heavy CAD models (.ipt, .iam) and scratch files."""
+    fake_plugin_root = tmp_path / "zip_plugin"
+    fake_plugin_root.mkdir()
+    (fake_plugin_root / "src").mkdir()
+    (fake_plugin_root / "src" / "server.py").write_text("# v1", encoding="utf-8")
+    (fake_plugin_root / "plugin.json").write_text(json.dumps({"version": "2.0.0"}), encoding="utf-8")
+    # Heavy CAD scratch files
+    (fake_plugin_root / "huge_assembly.iam").write_text("dummy binary data", encoding="utf-8")
+    (fake_plugin_root / "heavy_part.ipt").write_text("dummy binary data", encoding="utf-8")
+    (fake_plugin_root / "render.png").write_text("dummy binary data", encoding="utf-8")
+
+    monkeypatch.setenv("INVENTOR_MCP_GITHUB_TOKEN", "mock_token")
+    monkeypatch.setattr(updater, "check_for_updates", lambda force=True, plugin_root=None: {
+        "checked": True,
+        "update_available": True,
+        "install_type": "zip",
+        "latest_sha": "new_sha_999",
+        "installed_sha": "old_sha_111",
+        "incoming_commits": ["new_sha_999 Release v2.1.0"],
+    })
+
+    # Prepare archive
+    zip_bytes_io = io.BytesIO()
+    with zipfile.ZipFile(zip_bytes_io, "w") as z:
+        z.writestr("Antniom-LMInventor-plugin-new_sha_999/src/server.py", "# v2")
+        z.writestr("Antniom-LMInventor-plugin-new_sha_999/plugin.json", json.dumps({"version": "2.1.0"}))
+    zip_bytes = zip_bytes_io.getvalue()
+
+    backup_captured_files = []
+
+    orig_copy2 = shutil.copy2
+    def mock_copy2(src, dst, **kwargs):
+        backup_captured_files.append(os.path.basename(src))
+        return orig_copy2(src, dst, **kwargs)
+
+    monkeypatch.setattr(shutil, "copy2", mock_copy2)
+    monkeypatch.setattr(updater, "verify_installation", lambda root: (True, "OK"))
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.__enter__.return_value = io.BytesIO(zip_bytes)
+        mock_urlopen.return_value = mock_resp
+
+        res = updater.update_plugin(confirm=True, plugin_root=str(fake_plugin_root))
+        assert res["success"] is True
+
+    # Assert that heavy CAD and media files were skipped during backup
+    assert "huge_assembly.iam" not in backup_captured_files
+    assert "heavy_part.ipt" not in backup_captured_files
+    assert "render.png" not in backup_captured_files
+    assert "plugin.json" in backup_captured_files
+
+
+

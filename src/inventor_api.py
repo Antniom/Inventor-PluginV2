@@ -195,6 +195,11 @@ class InventorConnection:
         return self._app
 
     def connect(self, visible: bool = True) -> str:
+        if win32com is None or pythoncom is None:
+            raise RuntimeError(
+                "pywin32 is not installed. Autodesk Inventor automation requires pywin32>=306. "
+                "Please run: pip install pywin32>=306"
+            )
         pythoncom.CoInitialize()
         try:
             self._app = win32com.client.GetActiveObject("Inventor.Application")
