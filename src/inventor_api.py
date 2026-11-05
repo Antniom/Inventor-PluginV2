@@ -103,6 +103,39 @@ kWatercolorRendering = 8714                # DisplayModeEnum (RxInventor.tlb)
 kIllustrationRendering = 8715              # DisplayModeEnum (RxInventor.tlb)
 kTechnicalIllustrationRendering = 8716     # DisplayModeEnum (RxInventor.tlb)
 
+# HealthStatusEnum (Source: RxInventor.tlb - all 14 enum codes)
+kUnknownHealth        = 11777  # Safe default on unreadable health
+kUpToDateHealth       = 11778  # Nominal healthy status
+kOutOfDateHealth      = 11779
+kDriverLostHealth     = 11780
+kInErrorHealth        = 11781
+kDeletedHealth        = 11782
+kCannotComputeHealth  = 11783
+kSuppressedHealth     = 11784
+kBeyondStopNodeHealth = 11785
+kInconsistentHealth   = 11786
+kRedundantHealth      = 11787
+kNewlyAddedHealth     = 11788
+kInvalidLimitsHealth  = 11789
+kJointDOFLockedHealth = 11790
+
+HEALTH_STATUS_MAP = {
+    kUnknownHealth: "Unknown",
+    kUpToDateHealth: "UpToDate",
+    kOutOfDateHealth: "OutOfDate",
+    kDriverLostHealth: "DriverLost",
+    kInErrorHealth: "InError",
+    kDeletedHealth: "Deleted",
+    kCannotComputeHealth: "CannotCompute",
+    kSuppressedHealth: "Suppressed",
+    kBeyondStopNodeHealth: "BeyondStopNode",
+    kInconsistentHealth: "Inconsistent",
+    kRedundantHealth: "Redundant",
+    kNewlyAddedHealth: "NewlyAdded",
+    kInvalidLimitsHealth: "InvalidLimits",
+    kJointDOFLockedHealth: "JointDOFLocked",
+}
+
 
 def verify_api_constants() -> dict[str, int]:
     """Startup self-check verifying enum constants against Inventor's type library.
@@ -156,6 +189,10 @@ def verify_api_constants() -> dict[str, int]:
         ("DisplayModeEnum", "kRealisticRendering", kRealisticRendering),
         ("DisplayModeEnum", "kShadedWithEdgesRendering", kShadedWithEdgesRendering),
         ("DisplayModeEnum", "kWireframeNoHiddenEdges", kWireframeNoHiddenEdges),
+        ("HealthStatusEnum", "kUnknownHealth", kUnknownHealth),
+        ("HealthStatusEnum", "kUpToDateHealth", kUpToDateHealth),
+        ("HealthStatusEnum", "kOutOfDateHealth", kOutOfDateHealth),
+        ("HealthStatusEnum", "kInErrorHealth", kInErrorHealth),
     ]
 
     verified = {}
@@ -181,8 +218,83 @@ except Exception as _e:
     print(f"[inventor_api] Startup constant verification warning: {_e}", file=sys.stderr)
 
 
+def _build_relationship_counts(cdef) -> dict[str, int] | None:
+    """Build relationship reference counts across all occurrences in a single pass.
+
+    Drops COM overhead from O(N * M) to O(N + M) and prevents silent false zeros.
+    - Tracks read exceptions; if any occur, returns None.
+    - If constraints/joints exist in the assembly, but total matched relationships is 0,
+      detection is deemed failed and returns None.
+    """
+    try:
+        counts = {cdef.Occurrences.Item(i).Name: 0 for i in range(1, cdef.Occurrences.Count + 1)}
+    except Exception:
+        return None
+
+    errors = 0
+    total_constraints = 0
+    total_joints = 0
+
+    try:
+        total_constraints = cdef.Constraints.Count
+        for c in cdef.Constraints:
+            try:
+                occ1 = c.OccurrenceOne
+                if occ1:
+                    name1 = occ1.Name
+                    if name1 in counts:
+                        counts[name1] += 1
+            except Exception:
+                errors += 1
+
+            try:
+                occ2 = c.OccurrenceTwo
+                if occ2:
+                    name2 = occ2.Name
+                    if name2 in counts:
+                        counts[name2] += 1
+            except Exception:
+                errors += 1
+    except Exception:
+        return None
+
+    try:
+        total_joints = cdef.Joints.Count
+        for j in cdef.Joints:
+            try:
+                occ1 = j.OccurrenceOne
+                if occ1:
+                    name1 = occ1.Name
+                    if name1 in counts:
+                        counts[name1] += 1
+            except Exception:
+                errors += 1
+
+            try:
+                occ2 = j.OccurrenceTwo
+                if occ2:
+                    name2 = occ2.Name
+                    if name2 in counts:
+                        counts[name2] += 1
+            except Exception:
+                errors += 1
+    except Exception:
+        return None
+
+    # Fail safe 1: Any read error aborts
+    if errors > 0:
+        return None
+
+    # Fail safe 2: Sanity check (relationships exist, but 0 matched)
+    if (total_constraints + total_joints) > 0 and sum(counts.values()) == 0:
+        return None
+
+    return counts
+
 
 class InventorConnection:
+    _build_relationship_counts = staticmethod(_build_relationship_counts)
+
     def __init__(self):
         self._app = None
 
@@ -1846,10 +1958,17 @@ class InventorConnection:
         """Alias for delete_assembly_joint."""
         return self.delete_assembly_joint(name)
 
-    def enforce_subassembly_rigidity(self, occurrence_name: str | None = None) -> dict:
+    def enforce_subassembly_rigidity(
+        self,
+        occurrence_name: str | None = None,
+        exclude_keywords: list[str] | None = None,
+    ) -> dict:
         """Enforce internal rigidity on an assembly or subassembly occurrence.
         Performs safe grounding: skips occurrences that already have constraints
         or joints to other occurrences to prevent over-constraining or conflicting relationships.
+        Dynamic mechanism parts matching exclude_keywords are excluded from grounding.
+        If relationship detection fails (read errors or sanity check failure), ALL occurrences
+        are skipped to prevent improper grounding.
         """
         cdef = self.active_assembly()
         subasm_label = "active assembly"
@@ -1868,34 +1987,66 @@ class InventorConnection:
 
         newly_grounded = []
         skipped_constrained = []
+        skipped_detection_failed = []
+        skipped_moving = []
         already_grounded = []
 
         try:
+            rel_counts = _build_relationship_counts(target_cdef)
+
+            if rel_counts is None:
+                fail_reason = (
+                    "Relationship detection failed (COM read error or sanity check failed: "
+                    "relationships exist but matched 0 occurrences). "
+                    "All occurrences skipped to prevent improper grounding."
+                )
+                for i in range(1, target_cdef.Occurrences.Count + 1):
+                    child = target_cdef.Occurrences.Item(i)
+                    skipped_detection_failed.append({
+                        "name": child.Name,
+                        "reason": fail_reason,
+                    })
+                return {
+                    "subassembly": subasm_label,
+                    "total_occurrences": target_cdef.Occurrences.Count,
+                    "newly_grounded_count": 0,
+                    "newly_grounded": [],
+                    "skipped_count": 0,
+                    "skipped_constrained": [],
+                    "skipped_detection_failed_count": len(skipped_detection_failed),
+                    "skipped_detection_failed": skipped_detection_failed,
+                    "skipped_moving_count": 0,
+                    "skipped_moving": [],
+                    "already_grounded_count": 0,
+                    "already_grounded": [],
+                    "message": f"Subassembly rigidity skipped for {subasm_label}: {fail_reason}",
+                }
+
             for i in range(1, target_cdef.Occurrences.Count + 1):
                 child = target_cdef.Occurrences.Item(i)
-                c_count = 0
-                j_count = 0
-                try:
-                    c_count = child.Constraints.Count
-                except Exception:
-                    pass
-                try:
-                    j_count = child.Joints.Count
-                except Exception:
-                    pass
+                occ_name = child.Name
 
                 if child.Grounded:
-                    already_grounded.append(child.Name)
-                elif c_count > 0 or j_count > 0:
+                    already_grounded.append(occ_name)
+                    continue
+
+                if exclude_keywords and any(kw.lower() in occ_name.lower() for kw in exclude_keywords):
+                    skipped_moving.append({
+                        "name": occ_name,
+                        "reason": f"Excluded by user keyword match ({exclude_keywords}).",
+                    })
+                    continue
+
+                rel_count = rel_counts.get(occ_name, 0)
+                if rel_count > 0:
                     skipped_constrained.append({
-                        "name": child.Name,
-                        "constraints_count": c_count,
-                        "joints_count": j_count,
-                        "reason": f"Already constrained/jointed ({c_count} constraints, {j_count} joints)",
+                        "name": occ_name,
+                        "relationship_count": rel_count,
+                        "reason": f"Already constrained/jointed ({rel_count} active relationship(s)).",
                     })
                 else:
                     child.Grounded = True
-                    newly_grounded.append(child.Name)
+                    newly_grounded.append(occ_name)
 
             if target_doc and getattr(target_doc, "Dirty", False):
                 try:
@@ -1910,20 +2061,28 @@ class InventorConnection:
                 "newly_grounded": newly_grounded,
                 "skipped_count": len(skipped_constrained),
                 "skipped_constrained": skipped_constrained,
+                "skipped_detection_failed_count": 0,
+                "skipped_detection_failed": [],
+                "skipped_moving_count": len(skipped_moving),
+                "skipped_moving": skipped_moving,
                 "already_grounded_count": len(already_grounded),
                 "already_grounded": already_grounded,
                 "message": (
                     f"Subassembly rigidity enforced for {subasm_label}: "
-                    f"{len(newly_grounded)} parts grounded, {len(skipped_constrained)} skipped "
-                    f"(already constrained/jointed), {len(already_grounded)} already grounded."
+                    f"{len(newly_grounded)} parts grounded, {len(skipped_constrained)} constrained parts skipped, "
+                    f"{len(skipped_moving)} moving parts excluded, {len(already_grounded)} already grounded."
                 ),
             }
         except Exception as e:
             raise RuntimeError(f"enforce_subassembly_rigidity failed: {e}") from e
 
-    def enforce_subassembly_internal_rigidity(self, occurrence_name: str | None = None) -> dict:
+    def enforce_subassembly_internal_rigidity(
+        self,
+        occurrence_name: str | None = None,
+        exclude_keywords: list[str] | None = None,
+    ) -> dict:
         """Alias for enforce_subassembly_rigidity."""
-        return self.enforce_subassembly_rigidity(occurrence_name)
+        return self.enforce_subassembly_rigidity(occurrence_name, exclude_keywords=exclude_keywords)
 
     def set_occurrence_flexible(self, occ_name: str, flexible: bool = True) -> bool:
         """Set whether a subassembly occurrence evaluates internal degrees of freedom in parent."""
@@ -1962,8 +2121,58 @@ class InventorConnection:
             "joints": [],
             "positional_representations": self.list_positional_representations(),
             "warnings": [],
+            "kinematic_warnings": [],
         }
 
+        # Single-pass relationship scan
+        occ_rel_counts = _build_relationship_counts(cdef)
+        if occ_rel_counts is None:
+            try:
+                occ_rel_counts = {cdef.Occurrences.Item(i).Name: 0 for i in range(1, cdef.Occurrences.Count + 1)}
+            except Exception:
+                occ_rel_counts = {}
+            det_warn = (
+                "Relationship detection failed (COM read error or sanity check failed: "
+                "relationships exist but matched 0 occurrences). Occurrence relationship counts may be incomplete."
+            )
+            report["warnings"].append(det_warn)
+            report["kinematic_warnings"].append(det_warn)
+
+        # 1. Audit Constraints
+        for c in cdef.Constraints:
+            try:
+                raw_health = c.HealthStatus
+            except Exception:
+                raw_health = kUnknownHealth
+
+            health_label = HEALTH_STATUS_MAP.get(raw_health, f"Unknown_{raw_health}")
+            c_info = {
+                "name": c.Name,
+                "type_code": c.Type,
+                "health_code": raw_health,
+                "health": health_label,
+            }
+            report["constraints"].append(c_info)
+
+            if raw_health != kUpToDateHealth:
+                w = (
+                    f"UNHEALTHY/UNVERIFIED CONSTRAINT: '{c.Name}' has HealthStatus='{health_label}' (code {raw_health}). "
+                    "Relationship is sick, broken, unverified, or non-nominal."
+                )
+                report["warnings"].append(w)
+                report["kinematic_warnings"].append(w)
+
+        # 2. Audit Joints
+        for j in cdef.Joints:
+            j_info = {
+                "name": j.Name,
+                "type_code": j.Definition.JointType,
+                "visible": j.Visible,
+            }
+            report["joints"].append(j_info)
+
+        # 3. Audit Occurrences & detect floating components / missing grounded datum
+        grounded_count = 0
         for i in range(1, cdef.Occurrences.Count + 1):
             occ = cdef.Occurrences.Item(i)
             doc_file = ""
@@ -1981,17 +2190,7 @@ class InventorConnection:
             except Exception:
                 pass
 
-            c_count = 0
-            j_count = 0
-            try:
-                c_count = occ.Constraints.Count
-            except Exception:
-                pass
-            try:
-                j_count = occ.Joints.Count
-            except Exception:
-                pass
-
+            rel_count = occ_rel_counts.get(occ.Name, 0)
             occ_info = {
                 "index": i,
                 "name": occ.Name,
@@ -1999,31 +2198,21 @@ class InventorConnection:
                 "is_subassembly": is_subasm,
                 "grounded": occ.Grounded,
                 "flexible": flexible,
-                "constraints_count": c_count,
-                "joints_count": j_count,
+                "relationship_count": rel_count,
             }
             report["occurrences"].append(occ_info)
 
-            if not occ.Grounded and c_count == 0 and j_count == 0 and not is_subasm:
-                report["warnings"].append(
-                    f"Occurrence '{occ.Name}' is unconstrained and not grounded (free-floating)."
-                )
+            if occ.Grounded:
+                grounded_count += 1
+            elif rel_count == 0:
+                w = f"FLOATING COMPONENT: Occurrence '{occ.Name}' has Grounded=False and 0 active constraints/joints."
+                report["warnings"].append(w)
+                report["kinematic_warnings"].append(w)
 
-        for c in cdef.Constraints:
-            c_info = {
-                "name": c.Name,
-                "type_code": c.Type,
-                "health": getattr(c, "HealthStatus", "Unknown"),
-            }
-            report["constraints"].append(c_info)
-
-        for j in cdef.Joints:
-            j_info = {
-                "name": j.Name,
-                "type_code": j.Definition.JointType,
-                "visible": j.Visible,
-            }
-            report["joints"].append(j_info)
+        if grounded_count == 0 and cdef.Occurrences.Count > 0:
+            w = "NO GROUNDED DATUM: Zero occurrences in the assembly are grounded. The assembly lacks a stationary reference datum."
+            report["warnings"].append(w)
+            report["kinematic_warnings"].append(w)
 
         return report
 

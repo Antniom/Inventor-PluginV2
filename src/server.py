@@ -631,9 +631,9 @@ def create_assembly(name: str | None = None, template: str = "metric") -> str:
 @mcp.tool()
 def add_component(
     component_path: Annotated[str, Field(description="Full or relative path to .ipt or .iam component file")],
-    x_mm: Annotated[float, Field(description="X placement coordinate in millimeters", default=0.0)] = 0.0,
-    y_mm: Annotated[float, Field(description="Y placement coordinate in millimeters", default=0.0)] = 0.0,
-    z_mm: Annotated[float, Field(description="Z placement coordinate in millimeters", default=0.0)] = 0.0,
+    x_mm: Annotated[float, Field(description="X placement coordinate in millimeters")] = 0.0,
+    y_mm: Annotated[float, Field(description="Y placement coordinate in millimeters")] = 0.0,
+    z_mm: Annotated[float, Field(description="Z placement coordinate in millimeters")] = 0.0,
 ) -> str:
     """Insert a component occurrence (.ipt or .iam) into the active assembly document.
     Input coordinates are in millimeters.
@@ -650,10 +650,10 @@ async def add_assembly_constraint(
     entity2_type: Annotated[Literal["plane", "axis", "point", "face", "edge"], Field(description="Type of entity on occurrence 2")],
     entity2_idx: Annotated[int, Field(description="1-based index or name of the work entity or face/edge on occurrence 2", ge=1)],
     constraint_type: Annotated[Literal["mate", "flush", "angle", "insert"], Field(description="Constraint relationship type")],
-    offset_mm: Annotated[float, Field(description="Linear offset in mm or angle in degrees", default=0.0)] = 0.0,
-    name: Annotated[Optional[str], Field(description="Descriptive engineering name for the constraint", default=None)] = None,
-    min_limit: Annotated[Optional[str], Field(description="Minimum travel limit expression (e.g. '-220 mm' or '0 deg')", default=None)] = None,
-    max_limit: Annotated[Optional[str], Field(description="Maximum travel limit expression (e.g. '0 mm' or '115 deg')", default=None)] = None,
+    offset_mm: Annotated[float, Field(description="Linear offset in mm or angle in degrees")] = 0.0,
+    name: Annotated[Optional[str], Field(description="Descriptive engineering name for the constraint")] = None,
+    min_limit: Annotated[Optional[str], Field(description="Minimum travel limit expression (e.g. '-220 mm' or '0 deg')")] = None,
+    max_limit: Annotated[Optional[str], Field(description="Maximum travel limit expression (e.g. '0 mm' or '115 deg')")] = None,
     ctx: Context = None,
 ) -> str:
     """Add a Mate, Flush, Angle, or Insert assembly constraint with optional range-of-motion travel limits.
@@ -696,9 +696,9 @@ async def add_assembly_joint(
     joint_type: Annotated[Literal["rotational", "slider", "cylindrical", "rigid", "planar", "ball"], Field(description="Native Inventor joint type")],
     entity1_name: Annotated[str, Field(description="Work geometry, face index, or edge index on occurrence 1")],
     entity2_name: Annotated[str, Field(description="Work geometry, face index, or edge index on occurrence 2")],
-    start_limit: Annotated[Optional[str], Field(description="Minimum motion limit (e.g. '0 deg' or '0 mm')", default=None)] = None,
-    end_limit: Annotated[Optional[str], Field(description="Maximum motion limit (e.g. '115 deg' or '220 mm')", default=None)] = None,
-    name: Annotated[Optional[str], Field(description="Descriptive joint name", default=None)] = None,
+    start_limit: Annotated[Optional[str], Field(description="Minimum motion limit (e.g. '0 deg' or '0 mm')")] = None,
+    end_limit: Annotated[Optional[str], Field(description="Maximum motion limit (e.g. '115 deg' or '220 mm')")] = None,
+    name: Annotated[Optional[str], Field(description="Descriptive joint name")] = None,
     ctx: Context = None,
 ) -> str:
     """Create a native Autodesk Inventor Assembly Joint (Rotational/Slider/etc.).
@@ -734,15 +734,17 @@ def delete_assembly_joint(
 @mcp.tool()
 async def manage_subassembly_kinematics(
     action: Annotated[Literal["enforce_rigidity", "set_flexible", "set_grounded"], Field(description="Kinematic action to perform")],
-    occurrence_name: Annotated[Optional[str], Field(description="Target occurrence name in active assembly", default=None)] = None,
-    value: Annotated[bool, Field(description="State value for flexible or grounded", default=True)] = True,
+    occurrence_name: Annotated[Optional[str], Field(description="Target occurrence name in active assembly")] = None,
+    value: Annotated[bool, Field(description="State value for flexible or grounded")] = True,
+    exclude_keywords: Annotated[Optional[list[str]], Field(description="Optional list of name keywords for dynamic parts to exclude from grounding")] = None,
     ctx: Context = None,
 ) -> str:
     """Manage subassembly internal rigidity, occurrence grounding, and Flexible kinematics evaluation.
     When enforcing rigidity, occurrences with existing constraints or joints are safely skipped.
+    Dynamic mechanism parts matching exclude_keywords are excluded from grounding.
     """
     if action == "enforce_rigidity":
-        res = inv.enforce_subassembly_rigidity(occurrence_name)
+        res = inv.enforce_subassembly_rigidity(occurrence_name, exclude_keywords=exclude_keywords)
         return json.dumps(res, indent=2, ensure_ascii=False)
     elif action == "set_flexible":
         res = inv.set_occurrence_flexible(occurrence_name, value)
@@ -768,8 +770,8 @@ async def drive_kinematic_motion(
     target_name: Annotated[str, Field(description="Name of the constraint to drive")],
     start_value: Annotated[float, Field(description="Starting parameter value")],
     end_value: Annotated[float, Field(description="Final parameter value")],
-    unit: Annotated[Literal["deg", "mm", "cm"], Field(description="Parameter units", default="deg")] = "deg",
-    steps: Annotated[int, Field(description="Number of intermediate interpolation steps", default=10, ge=1)] = 10,
+    unit: Annotated[Literal["deg", "mm", "cm"], Field(description="Parameter units")] = "deg",
+    steps: Annotated[int, Field(description="Number of intermediate interpolation steps", ge=1)] = 10,
     ctx: Context = None,
 ) -> str:
     """Drive a constraint across a travel range, simulating physical movement and clearance."""
@@ -786,8 +788,8 @@ async def drive_kinematic_motion(
 @mcp.tool()
 def apply_material_appearance(
     appearance_name: Annotated[str, Field(description="Material appearance asset name (e.g. 'Gold', 'Smooth - White', 'Clear Glass')")],
-    target_level: Annotated[Literal["part", "surface_body", "feature"], Field(description="Entity level to apply appearance", default="part")] = "part",
-    target_index: Annotated[int, Field(description="1-based index of the surface body or feature", default=1, ge=1)] = 1,
+    target_level: Annotated[Literal["part", "surface_body", "feature"], Field(description="Entity level to apply appearance")] = "part",
+    target_index: Annotated[int, Field(description="1-based index of the surface body or feature", ge=1)] = 1,
 ) -> str:
     """Apply an appearance asset override to a part, surface body, or individual feature."""
     return inv.apply_appearance(appearance_name, target_level=target_level, target_index=target_index)
@@ -796,15 +798,15 @@ def apply_material_appearance(
 @mcp.tool()
 def render_showcase_viewport(
     output_png_path: Annotated[str, Field(description="Destination file path for captured image (PNG)")],
-    eye_x_mm: Annotated[float, Field(description="Camera eye position X coordinate in mm", default=1200.0)] = 1200.0,
-    eye_y_mm: Annotated[float, Field(description="Camera eye position Y coordinate in mm", default=1000.0)] = 1000.0,
-    eye_z_mm: Annotated[float, Field(description="Camera eye position Z coordinate in mm", default=1500.0)] = 1500.0,
-    target_x_mm: Annotated[float, Field(description="Camera focal target position X coordinate in mm", default=300.0)] = 300.0,
-    target_y_mm: Annotated[float, Field(description="Camera focal target position Y coordinate in mm", default=500.0)] = 500.0,
-    target_z_mm: Annotated[float, Field(description="Camera focal target position Z coordinate in mm", default=200.0)] = 200.0,
-    width: Annotated[int, Field(description="Image pixel width", default=1920, ge=320)] = 1920,
-    height: Annotated[int, Field(description="Image pixel height", default=1440, ge=240)] = 1440,
-    display_style: Annotated[Literal["shaded_with_edges", "realistic", "shaded", "wireframe"], Field(description="Visual rendering style", default="shaded_with_edges")] = "shaded_with_edges",
+    eye_x_mm: Annotated[float, Field(description="Camera eye position X coordinate in mm")] = 1200.0,
+    eye_y_mm: Annotated[float, Field(description="Camera eye position Y coordinate in mm")] = 1000.0,
+    eye_z_mm: Annotated[float, Field(description="Camera eye position Z coordinate in mm")] = 1500.0,
+    target_x_mm: Annotated[float, Field(description="Camera focal target position X coordinate in mm")] = 300.0,
+    target_y_mm: Annotated[float, Field(description="Camera focal target position Y coordinate in mm")] = 500.0,
+    target_z_mm: Annotated[float, Field(description="Camera focal target position Z coordinate in mm")] = 200.0,
+    width: Annotated[int, Field(description="Image pixel width", ge=320)] = 1920,
+    height: Annotated[int, Field(description="Image pixel height", ge=240)] = 1440,
+    display_style: Annotated[Literal["shaded_with_edges", "realistic", "shaded", "wireframe"], Field(description="Visual rendering style")] = "shaded_with_edges",
 ):
     """Position the viewport camera and export a high-resolution render.
     Returns an MCP Image object directly into chat.
@@ -841,11 +843,11 @@ def supervisor_clean_processes(
 @mcp.tool()
 async def manage_positional_representations(
     action: Annotated[Literal["activate", "create", "set_override", "setup_standard_max_positions", "list"], Field(description="Action to perform on Positional Representations")],
-    rep_name: Annotated[Optional[str], Field(description="Name of the Positional Representation (e.g. 'Master', 'Porta_Aberta_Max', 'Gaveta_Aberta_Max', 'Posicao_Maxima')", default="Master")] = "Master",
-    constraint_name: Annotated[Optional[str], Field(description="Name of the assembly constraint to override", default=None)] = None,
-    override_expression: Annotated[Optional[str], Field(description="Parameter override expression (e.g. '115.0 deg', '-220 mm')", default=None)] = None,
-    door_constraint_name: Annotated[Optional[str], Field(description="Door constraint name for setup_standard_max_positions", default=None)] = None,
-    drawer_constraint_name: Annotated[Optional[str], Field(description="Drawer constraint name for setup_standard_max_positions", default=None)] = None,
+    rep_name: Annotated[Optional[str], Field(description="Name of the Positional Representation (e.g. 'Master', 'Porta_Aberta_Max', 'Gaveta_Aberta_Max', 'Posicao_Maxima')")] = "Master",
+    constraint_name: Annotated[Optional[str], Field(description="Name of the assembly constraint to override")] = None,
+    override_expression: Annotated[Optional[str], Field(description="Parameter override expression (e.g. '115.0 deg', '-220 mm')")] = None,
+    door_constraint_name: Annotated[Optional[str], Field(description="Door constraint name for setup_standard_max_positions")] = None,
+    drawer_constraint_name: Annotated[Optional[str], Field(description="Drawer constraint name for setup_standard_max_positions")] = None,
     ctx: Context = None,
 ) -> str:
     """Manage Autodesk Inventor Positional Representations (PosReps).
