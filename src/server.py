@@ -8,6 +8,7 @@ try:
 except (ImportError, ModuleNotFoundError):
     from mcp.server.fastmcp import FastMCP, Context, Image
 from . import inventor_api as _api
+from . import updater as _updater
 
 mcp = FastMCP(
     "Autodesk Inventor",
@@ -140,14 +141,25 @@ def connect(visible: bool = True) -> str:
 
 @mcp.tool()
 def status() -> str:
-    """Check connection status and active document info."""
+    """Check connection status, active document info, and plugin updater state."""
+    updater_summary = _updater.get_updater_status_summary()
     if not inv.is_connected():
-        return "Not connected to Inventor. Call connect() first."
+        return json.dumps({
+            "connected": False,
+            "status": "Not connected to Inventor. Call connect() first.",
+            "updater": updater_summary,
+        }, indent=2, ensure_ascii=False)
     try:
         info = inv.get_document_info()
-        return json.dumps(info, indent=2, ensure_ascii=False)
+        res = dict(info) if isinstance(info, dict) else {"document": info}
+        res["updater"] = updater_summary
+        return json.dumps(res, indent=2, ensure_ascii=False)
     except RuntimeError:
-        return "Connected to Inventor, but no document is open."
+        return json.dumps({
+            "connected": True,
+            "status": "Connected to Inventor, but no document is open.",
+            "updater": updater_summary,
+        }, indent=2, ensure_ascii=False)
 
 
 # ---------- Document management ----------
@@ -853,6 +865,39 @@ async def manage_positional_representations(
         raise ValueError(f"Unknown action: '{action}'")
 
 
+# ---------- Plugin Self-Update Management ----------
+
+@mcp.tool()
+def check_for_updates(
+    force: Annotated[bool, Field(description="If True, bypass the 7-day throttle and query GitHub remote immediately.")] = False,
+) -> str:
+    """Check whether an update is available from the GitHub repository.
+
+    Reports current vs latest commit SHA / tag, commit messages if available,
+    install type, and whether dependencies changed. Does not apply the update.
+    """
+    res = _updater.check_for_updates(force=force)
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def update_plugin(
+    confirm: Annotated[bool, Field(description="Must be set to True to apply the update. If False, performs a dry-run.")] = False,
+) -> str:
+    """Safely update the Autodesk Inventor plugin to the latest version from GitHub main.
+
+    If confirm is False (default), performs a dry-run and describes what would change.
+    If confirm is True:
+      - Validates that working tree is clean and branch is 'main'
+      - Fetches latest changes and performs fast-forward merge (git) or archive extract (zip)
+      - Verifies Python syntax and imports in an isolated subprocess
+      - Automatically rolls back to the prior version if verification fails
+      - Reminds you to restart the MCP server and run 'pip install -e .' if dependencies changed.
+    """
+    res = _updater.update_plugin(confirm=confirm)
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
+
 # ---------- Dynamic MCP Resources & Prompts ----------
 
 @mcp.resource("inventor://assembly/kinematics")
@@ -879,14 +924,28 @@ def get_assembly_representations_resource() -> str:
 
 @mcp.resource("inventor://status")
 def get_status_resource() -> str:
-    """Active document status, units, and software version."""
+    """Active document status, units, software version, and plugin updater state."""
+    updater_summary = _updater.get_updater_status_summary()
     if not inv.is_connected():
-        return json.dumps({"connected": False, "status": "Not connected to Inventor. Call connect() first."}, indent=2)
+        return json.dumps({
+            "connected": False,
+            "status": "Not connected to Inventor. Call connect() first.",
+            "updater": updater_summary,
+        }, indent=2, ensure_ascii=False)
     try:
         info = inv.get_document_info()
-        return json.dumps({"connected": True, "document": info}, indent=2, ensure_ascii=False)
+        return json.dumps({
+            "connected": True,
+            "document": info,
+            "updater": updater_summary,
+        }, indent=2, ensure_ascii=False)
     except Exception:
-        return json.dumps({"connected": True, "document": None, "status": "Connected, but no active document."}, indent=2, ensure_ascii=False)
+        return json.dumps({
+            "connected": True,
+            "document": None,
+            "status": "Connected, but no active document.",
+            "updater": updater_summary,
+        }, indent=2, ensure_ascii=False)
 
 
 @mcp.prompt("audit_assembly")
@@ -900,7 +959,18 @@ def audit_assembly_prompt(assembly_name: str = ""):
     )
 
 
+# Launch non-blocking background autoupdate worker (throttled, zero stdout)
+try:
+    _updater.start_background_autoupdate()
+except Exception:
+    pass
+
+
 def main():
+    try:
+        _updater.start_background_autoupdate()
+    except Exception:
+        pass
     mcp.run(transport="stdio")
 
 

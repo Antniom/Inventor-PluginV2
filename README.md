@@ -9,7 +9,7 @@
 > **Author:** Antonio Coelho  
 > **Repository:** [https://github.com/Antniom/LMInventor-plugin](https://github.com/Antniom/LMInventor-plugin)
 
-The **Autodesk Inventor AI Studio Plugin** is a unified, first-class agentic CAD plugin for AI coding assistants and autonomous engineering agents (Antigravity, Claude Code, Cline, Cursor). It combines a high-performance **49-tool Model Context Protocol (MCP) server** with **5 specialized Antigravity CAD skills** into an integrated engineering suite.
+The **Autodesk Inventor AI Studio Plugin** is a unified, first-class agentic CAD plugin for AI coding assistants and autonomous engineering agents (Antigravity, Claude Code, Cline, Cursor). It combines a high-performance **51-tool Model Context Protocol (MCP) server** with **5 specialized Antigravity CAD skills** into an integrated engineering suite.
 
 ---
 
@@ -25,14 +25,16 @@ LMInventor-plugin/
 ├── pyproject.toml              # Modern Python packaging (mcp>=2.3.0, pywin32)
 ├── inventor_mcp_server.py      # Standalone launcher with sys.path resolution
 ├── src/
-│   ├── server.py               # FastMCP Server: 49 tools, 3 dynamic resources, prompts
-│   └── inventor_api.py         # Robust COM API abstraction layer (mm units, topology)
+│   ├── server.py               # FastMCP Server: 51 tools, 3 dynamic resources, prompts
+│   ├── inventor_api.py         # Robust COM API abstraction layer (mm units, topology)
+│   └── updater.py              # Safe background auto-updater (throttled, zero stdout, rollback)
 ├── skills/                     # 5 Non-Optional Antigravity Domain Skills:
 │   ├── inventor-modeling/      # Parametric 3D parts, sketches, features, sheet metal
 │   ├── inventor-assemblies/    # Assembly architecture, datums, rigidity, constraints
 │   ├── inventor-kinematics/    # PosReps, mechanism travel limits, motion driving, joints
 │   ├── inventor-diagnostics/   # Process supervisor, orphan cleanup, rebuild diagnostics
 │   └── inventor-din-parts/     # Parametric DIN/ISO mechanical hardware generation
+├── tests/                      # Full test suite (test_updater.py)
 └── docs/                       # Verification bundles and API notes
 ```
 
@@ -40,7 +42,7 @@ LMInventor-plugin/
 
 ## 🌟 Capabilities & Features
 
-### 1. 49 Native MCP Tools
+### 1. 51 Native MCP Tools
 - **Parametric 3D Modeling (`.ipt`)**: Fully constrained 2D sketching, boss/cut extrusions, revolves, native hole wizard (clearance, tapped, counterbore, countersink), fillets, chamfers, and circular patterns.
 - **Sheet Metal Modeling**: Sheet metal faces, flanges with automatic radius/relief calculations, cuts, and flat pattern exports.
 - **Assembly Architecture (`.iam`)**: Bottom-up component insertion, declarative occurrence transformations, coordinate reference planes, and stationary datum locking.
@@ -51,6 +53,7 @@ LMInventor-plugin/
 - **Dynamic Motion Driving**: Multi-step kinematic motion interpolation for constraint stroke verification.
 - **Showcase Perspective Rendering**: High-resolution viewport capture (1280×720, 1920×1080) with explicit camera positioning, returning native MCP `Image` content blocks.
 - **Safe Process Supervisor**: Anti-deadlock process auditor that safeguards against orphan headless background instances with strict startup grace periods and explicit PID confirmation.
+- **Safe Auto-Updater Tools**: `check_for_updates` (check remote updates with 7-day throttle or force bypass) and `update_plugin` (dry-run preview and atomic fast-forward apply with automatic isolated rollback).
 - **`execute_python` Power Tool**: Persistent interactive Python execution environment for deep custom COM automation.
 
 ### 2. 3 Dynamic MCP Resources & Prompts
@@ -126,6 +129,50 @@ Antigravity automatically discovers `plugin.json` and activates the MCP server a
    # For Claude Code:
    Copy-Item -Recurse skills\* "$env:USERPROFILE\.claude\skills\"
    ```
+
+---
+
+## 🔄 Safe Auto-Updater
+
+The plugin features a built-in, completely safe self-updater designed specifically for headless agentic environments (stdio transport):
+
+### Safety Guarantees & Architecture
+1. **Zero Stdout Writes (Strict Protocol Invariant):**  
+   The updater NEVER writes to `sys.stdout`. All diagnostic logs are sent strictly to `sys.stderr` to avoid corrupting the MCP JSON-RPC protocol framing.
+2. **Non-Blocking Startup:**  
+   The update check runs in an isolated background daemon thread with strict $\le 10\text{s}$ network timeouts and swallowed exceptions. An offline environment or failed network call will **never** delay or prevent the server from starting.
+3. **7-Day Throttling:**  
+   Automatic checks run at most once every 7 days. Throttle state is persisted out-of-tree under `%LOCALAPPDATA%/inventor-mcp/updater.json` (Windows) or `~/.config/inventor-mcp/updater.json` (Linux/macOS), ensuring the git working tree remains pristine.
+4. **Private Repository Authentication:**  
+   Resolves credentials without logging, printing, or storing tokens using a secure priority hierarchy:
+   - `INVENTOR_MCP_GITHUB_TOKEN` environment variable
+   - `GITHUB_TOKEN` environment variable
+   - `gh auth token` (GitHub CLI)
+   - Native git credential helper (for git clone installations)
+5. **Pre-flight Invariants & Fast-Forward Only:**  
+   Updates are strictly refused if the working tree has uncommitted local edits, if the branch is not `main`, or if local history has diverged. Merges strictly use `git merge --ff-only` (never `--hard` or recursive merges).
+6. **Isolated Subprocess Verification & Automatic Rollback:**  
+   After applying an update, the plugin validates Python syntax across all source files (`py_compile`) and verifies `import src.server` inside a **separate subprocess**. If compilation or importing fails, the updater automatically rolls back to the prior commit (`git reset --keep <pre_sha>`) or restores the zip backup.
+7. **Change Detection:**  
+   Reports when `pyproject.toml` dependencies change (prompting `pip install -e .`) and flags when `skills/` have been updated so external agent copies can be re-synced.
+
+### Configuration & Environment Modes
+Configure behavior via the `INVENTOR_MCP_AUTOUPDATE` environment variable:
+- `apply` *(default)*: Checks in the background on startup (throttled to 7 days) and automatically applies verified fast-forward updates.
+- `check`: Checks for updates and records status without applying.
+- `off`: Disables automatic startup checks entirely.
+
+### Interactive MCP Tools & Resources
+- **`check_for_updates(force: bool = False)`**: Check remote repository status on-demand (pass `force=True` to bypass the 7-day throttle).
+- **`update_plugin(confirm: bool = False)`**: Apply updates. Defaults to a dry-run preview (`confirm=False`). Pass `confirm=True` to execute the verified update.
+- **`status()` Tool & `inventor://status` Resource**: Exposes current installed commit SHA, version, update availability, and restart requirements.
+
+### Manual Rollback
+If you ever need to manually revert an update:
+```powershell
+cd "$env:USERPROFILE\.gemini\config\plugins\inventor"
+git reset --keep <previous_sha>
+```
 
 ---
 

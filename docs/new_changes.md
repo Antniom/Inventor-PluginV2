@@ -521,7 +521,8 @@ The entire suite can now be bundled and distributed as the **`inventor-plugin`**
 │       └── manage_positional_representations.json
 └── src/
     ├── inventor_api.py (Unified Part + Assembly Engine)
-    └── server.py (FastMCP 2.0 Server with 49 Tools, 3 Resources & 1 Prompt)
+    ├── updater.py (Safe Background Auto-Updater with Rollback)
+    └── server.py (FastMCP 2.0 Server with 51 Tools, 3 Resources & 1 Prompt)
 ```
 
 ### Manifest `plugin.json` Specification:
