@@ -12,6 +12,7 @@ HARD CONSTRAINTS (stdio transport):
 
 from __future__ import annotations
 
+import base64
 import datetime
 import json
 import os
@@ -184,28 +185,47 @@ def run_git(
     auth_token: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute git with argument list, timeout, and terminal prompts disabled.
-    Never uses shell=True. Masks tokens in errors.
+    Never uses shell=True. Passes credentials via temporary config to avoid
+    exposing tokens on the process command line.
     """
     root = cwd or get_plugin_root()
     cmd = ["git"]
-    if auth_token:
-        # Pass extra header for HTTP operations without modifying global config
-        cmd.extend(["-c", f"http.extraHeader=Authorization: Bearer {auth_token}"])
-    cmd.extend(args)
+    temp_cfg_path = None
+    try:
+        if auth_token:
+            # Use Basic auth with x-access-token for GitHub git-over-HTTPS.
+            # Store in a temporary .gitconfig so the token NEVER shows in command line arguments.
+            auth_b64 = base64.b64encode(f"x-access-token:{auth_token}".encode("utf-8")).decode("ascii")
+            with tempfile.NamedTemporaryFile(
+                mode="w", delete=False, suffix=".gitconfig", encoding="utf-8"
+            ) as f:
+                f.write(f"[http]\n    extraHeader = Authorization: Basic {auth_b64}\n")
+                temp_cfg_path = f.name
+            normalized_cfg = temp_cfg_path.replace("\\", "/")
+            cmd.extend(["-c", f"include.path={normalized_cfg}"])
 
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    env["GIT_ASKPASS"] = ""
+        cmd.extend(args)
 
-    return subprocess.run(
-        cmd,
-        cwd=root,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-        env=env,
-    )
+        env = dict(os.environ)
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GCM_INTERACTIVE"] = "never"
+        env["GIT_ASKPASS"] = ""
+
+        return subprocess.run(
+            cmd,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    finally:
+        if temp_cfg_path and os.path.exists(temp_cfg_path):
+            try:
+                os.remove(temp_cfg_path)
+            except OSError:
+                pass
 
 
 def check_for_updates(
@@ -453,14 +473,14 @@ def update_plugin(
                 "reason": f"Refusing update: current branch is '{current_branch}', expected 'main'.",
             }
 
-        # 2. Dirty tree check: must be clean
-        status_res = run_git(["status", "--porcelain"], cwd=root, timeout=5)
+        # 2. Dirty tree check: must be clean (ignoring untracked files)
+        status_res = run_git(["status", "--porcelain", "--untracked-files=no"], cwd=root, timeout=5)
         if status_res.returncode != 0 or status_res.stdout.strip():
             dirty_files = [line.strip() for line in status_res.stdout.splitlines() if line.strip()]
             return {
                 "success": False,
                 "action": "refused",
-                "reason": "Refusing update: working tree has uncommitted local changes.",
+                "reason": "Refusing update: working tree has uncommitted local changes to tracked files.",
                 "dirty_files": dirty_files,
             }
 
@@ -546,10 +566,11 @@ def update_plugin(
                 "reason": "Authentication token required to download zipball for private repository.",
             }
 
-        # Create temporary backup directory
+        # Create temporary backup directory of the entire plugin folder
         backup_dir = tempfile.mkdtemp(prefix="inventor_mcp_backup_")
-        items_to_backup = ["src", "skills", "plugin.json", "pyproject.toml", "README.md", "LICENSE", "inventor_mcp_server.py"]
-        for item in items_to_backup:
+        for item in os.listdir(root):
+            if item in (".git", "__pycache__", ".pytest_cache", ".gemini"):
+                continue
             src_item = os.path.join(root, item)
             dst_item = os.path.join(backup_dir, item)
             if os.path.isdir(src_item):
@@ -561,12 +582,19 @@ def update_plugin(
         zip_path = os.path.join(staging_dir, "release.zip")
 
         try:
+            target_sha = check_res.get("latest_sha")
+            # Target the exact commit that was checked to avoid race conditions with main
+            target_url = (
+                f"https://api.github.com/repos/{REPO_FULL}/zipball/{target_sha}"
+                if target_sha
+                else GITHUB_API_ZIPBALL_URL
+            )
             headers = {
                 "User-Agent": "LMInventor-AutoUpdater/2.0",
                 "Accept": "application/vnd.github.v3+json",
                 "Authorization": f"Bearer {token}",
             }
-            req = urllib.request.Request(GITHUB_API_ZIPBALL_URL, headers=headers)
+            req = urllib.request.Request(target_url, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 with open(zip_path, "wb") as f_out:
                     shutil.copyfileobj(resp, f_out)
@@ -584,8 +612,26 @@ def update_plugin(
                 raise RuntimeError("Extracted archive did not contain expected root directory")
             inner_root = os.path.join(staging_dir, inner_dirs[0])
 
-            # Replace files in root
-            for item in os.listdir(inner_root):
+            # Replace files in root: remove obsolete installed directories/files
+            # while preserving user untracked files (e.g. .mcp.json, .env, *.log)
+            archive_items = set(os.listdir(inner_root))
+            managed_items = archive_items | {
+                "src", "skills", "docs", "tests", "assets",
+                "plugin.json", "pyproject.toml", "README.md", "LICENSE", "inventor_mcp_server.py"
+            }
+
+            for item in os.listdir(root):
+                if item in (".git", "__pycache__", ".pytest_cache", ".gemini", ".mcp.json", ".env"):
+                    continue
+                if item in managed_items and item not in archive_items:
+                    # File/dir deleted upstream
+                    d_path = os.path.join(root, item)
+                    if os.path.isdir(d_path):
+                        shutil.rmtree(d_path)
+                    elif os.path.isfile(d_path):
+                        os.remove(d_path)
+
+            for item in archive_items:
                 if item in (".git", "__pycache__"):
                     continue
                 s_path = os.path.join(inner_root, item)
@@ -601,13 +647,19 @@ def update_plugin(
             ok, verify_msg = verify_installation(root)
             if not ok:
                 _log_err(f"Zip update verification failed ({verify_msg}). Restoring backup...")
-                # Restore from backup
+                # Clean current files before restoring backup
+                for item in os.listdir(root):
+                    if item in (".git", "__pycache__", ".pytest_cache", ".gemini", ".mcp.json", ".env"):
+                        continue
+                    p = os.path.join(root, item)
+                    if os.path.isdir(p):
+                        shutil.rmtree(p)
+                    elif os.path.isfile(p):
+                        os.remove(p)
                 for item in os.listdir(backup_dir):
                     s_path = os.path.join(backup_dir, item)
                     d_path = os.path.join(root, item)
                     if os.path.isdir(s_path):
-                        if os.path.exists(d_path):
-                            shutil.rmtree(d_path)
                         shutil.copytree(s_path, d_path)
                     else:
                         shutil.copy2(s_path, d_path)

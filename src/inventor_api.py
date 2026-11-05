@@ -3,8 +3,13 @@
 import glob
 import os
 import time
-import win32com.client
-import pythoncom
+
+try:
+    import win32com.client
+    import pythoncom
+except ImportError:
+    win32com = None
+    pythoncom = None
 
 
 # ==============================================================================

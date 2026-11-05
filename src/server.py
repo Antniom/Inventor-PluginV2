@@ -83,6 +83,13 @@ def execute_python(code: str) -> str:
 def reload_api() -> str:
     """Hot-reload inventor_api.py from disk. Use after editing the wrapper —
     no Claude Code restart needed. Keeps the existing COM connection."""
+    st = _updater.load_state()
+    if st.get("restart_required"):
+        return (
+            "Refusing reload: A plugin update has been applied to disk and a server restart is pending. "
+            "Hot-reloading inventor_api.py would cause a version mismatch with the running server. "
+            "Please restart the MCP server process instead."
+        )
     import importlib
     global inv
     importlib.reload(_api)
@@ -957,13 +964,6 @@ def audit_assembly_prompt(assembly_name: str = ""):
         f"using standard constraints and Positional Representations for maximum positions "
         f"(using native Joints only if explicitly requested)."
     )
-
-
-# Launch non-blocking background autoupdate worker (throttled, zero stdout)
-try:
-    _updater.start_background_autoupdate()
-except Exception:
-    pass
 
 
 def main():

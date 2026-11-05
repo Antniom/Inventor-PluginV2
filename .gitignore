@@ -1,5 +1,6 @@
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 *.egg-info/
 .env
 *.ipt
@@ -8,3 +9,14 @@ __pycache__/
 OldVersions/
 gen_py/
 SUBMISSION_KIT.md
+
+# Test and development caches
+.pytest_cache/
+tests/.pytest_cache/
+.coverage
+htmlcov/
+*.log
+startup.log
+
+# Client local configuration
+.mcp.json

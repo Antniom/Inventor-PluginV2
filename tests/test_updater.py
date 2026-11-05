@@ -477,3 +477,90 @@ def test_server_mcp_updater_tools_and_status(clean_env, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == "", f"Server tool/resource wrote to stdout: {captured.out}"
 
+
+def test_untracked_files_do_not_block_update(clean_env, tmp_path, monkeypatch):
+    """Untracked files (e.g. .mcp.json, .pytest_cache) must NOT block updates."""
+    fake_git_root = tmp_path / "git_repo"
+    fake_git_root.mkdir()
+    (fake_git_root / ".git").mkdir()
+
+    monkeypatch.setattr(updater, "check_for_updates", lambda force=True, plugin_root=None: {
+        "checked": True,
+        "update_available": True,
+        "install_type": "git",
+        "latest_sha": "def5678",
+        "installed_sha": "abc1234",
+        "incoming_commits": ["def5678 feat: new feature"],
+    })
+
+    def mock_run_git(args, **kwargs):
+        if "rev-parse" in args and "--abbrev-ref" in args:
+            return subprocess.CompletedProcess(["git"] + args, 0, stdout="main\n", stderr="")
+        if "status" in args:
+            # When --untracked-files=no is used, untracked files are excluded
+            assert "--untracked-files=no" in args
+            return subprocess.CompletedProcess(["git"] + args, 0, stdout="", stderr="")
+        if "rev-list" in args:
+            return subprocess.CompletedProcess(["git"] + args, 0, stdout="", stderr="")
+        if "rev-parse" in args and "HEAD" in args:
+            return subprocess.CompletedProcess(["git"] + args, 0, stdout="abc1234\n", stderr="")
+        if "merge" in args and "--ff-only" in args:
+            return subprocess.CompletedProcess(["git"] + args, 0, stdout="Fast-forward\n", stderr="")
+        if "diff" in args:
+            return subprocess.CompletedProcess(["git"] + args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(["git"] + args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(updater, "run_git", mock_run_git)
+    monkeypatch.setattr(updater, "verify_installation", lambda root: (True, "OK"))
+
+    res = updater.update_plugin(confirm=True, plugin_root=str(fake_git_root))
+    assert res["success"] is True
+    assert res["action"] == "applied"
+
+
+def test_run_git_token_in_temp_config_not_command_line(clean_env, monkeypatch):
+    """Auth tokens must NEVER be passed as raw command line arguments (process inspection safety).
+    GCM_INTERACTIVE must be set to 'never' to prevent modal popup windows.
+    """
+    secret = "secret_pat_xyz_12345"
+    captured_calls = []
+
+    real_run = subprocess.run
+
+    def mock_subprocess_run(cmd, **kwargs):
+        captured_calls.append((cmd, kwargs))
+        # Ensure token is NOT in command-line arguments
+        for arg in cmd:
+            assert secret not in arg, f"Secret token leaked into command line argument: {arg}"
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", mock_subprocess_run)
+
+    res = updater.run_git(["fetch", "origin", "main"], auth_token=secret)
+    assert len(captured_calls) == 1
+    called_cmd, called_kwargs = captured_calls[0]
+
+    # Verify include.path was used
+    assert any(arg.startswith("include.path=") for arg in called_cmd)
+    # Verify environment flags
+    env = called_kwargs["env"]
+    assert env["GCM_INTERACTIVE"] == "never"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_reload_api_refuses_when_restart_required(clean_env, monkeypatch):
+    """reload_api must refuse to reload inventor_api if a pending update requires server restart."""
+    from src import server
+
+    # 1. restart_required = True -> refused
+    monkeypatch.setattr(updater, "load_state", lambda: {"restart_required": True})
+    msg = server.reload_api()
+    assert "Refusing reload" in msg
+    assert "restart" in msg
+
+    # 2. restart_required = False -> allowed
+    monkeypatch.setattr(updater, "load_state", lambda: {"restart_required": False})
+    msg_ok = server.reload_api()
+    assert "reloaded" in msg_ok
+
+
