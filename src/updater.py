@@ -625,7 +625,7 @@ def update_plugin(
                 src_item = os.path.join(root, item)
                 dst_item = os.path.join(backup_dir, item)
                 if os.path.isdir(src_item):
-                    shutil.copytree(src_item, dst_item)
+                    shutil.copytree(src_item, dst_item, dirs_exist_ok=True)
                 elif os.path.isfile(src_item):
                     shutil.copy2(src_item, dst_item)
 
@@ -648,7 +648,7 @@ def update_plugin(
                 if os.path.isdir(s_path):
                     if os.path.exists(d_path):
                         shutil.rmtree(d_path, ignore_errors=True)
-                    shutil.copytree(s_path, d_path)
+                    shutil.copytree(s_path, d_path, dirs_exist_ok=True)
                 else:
                     shutil.copy2(s_path, d_path)
 
@@ -673,7 +673,7 @@ def update_plugin(
                     s_path = os.path.join(backup_dir, item)
                     d_path = os.path.join(root, item)
                     if os.path.isdir(s_path):
-                        shutil.copytree(s_path, d_path)
+                        shutil.copytree(s_path, d_path, dirs_exist_ok=True)
                     else:
                         shutil.copy2(s_path, d_path)
 
@@ -726,7 +726,7 @@ def update_plugin(
                 s_path = os.path.join(backup_dir, item)
                 d_path = os.path.join(root, item)
                 if os.path.isdir(s_path):
-                    shutil.copytree(s_path, d_path)
+                    shutil.copytree(s_path, d_path, dirs_exist_ok=True)
                 else:
                     shutil.copy2(s_path, d_path)
             return {

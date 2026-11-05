@@ -155,6 +155,9 @@ The plugin features a built-in, completely safe self-updater designed specifical
    After applying an update, the plugin validates Python syntax across all source files (`py_compile`) and verifies `import src.server` inside a **separate subprocess**. If compilation or importing fails, the updater automatically rolls back to the prior commit (`git reset --keep <pre_sha>`) or restores the zip backup.
 7. **Change Detection:**  
    Reports when `pyproject.toml` dependencies change (prompting `pip install -e .`) and flags when `skills/` have been updated so external agent copies can be re-synced.
+8. **Scoped File Management & Personal Files:**  
+   - **Git clone installations**: Local uncommitted changes to tracked files strictly prevent updates until resolved; untracked scratch files are ignored and remain untouched.
+   - **Zip/folder installations**: Managed plugin folders (`src/`, `skills/`, `docs/`, `tests/`, `assets/`) and root repository files are replaced wholesale during update (`dirs_exist_ok=True` ensures graceful merging even under Windows file-locking or antivirus indexers). Personal scratch files, custom scripts, or notes should be kept in the plugin root (e.g. `scratch.ipt`, `render.png`, `.mcp.json`) or in custom unmanaged folders outside `src/`, `skills/`, `docs/`, `tests/`, and `assets/`.
 
 ### Configuration & Environment Modes
 Configure behavior via the `INVENTOR_MCP_AUTOUPDATE` environment variable:

@@ -650,4 +650,47 @@ def test_zip_rollback_preserves_untracked_files_and_tracked_assets(clean_env, tm
     assert (fake_plugin_root / "src" / "server.py").read_text(encoding="utf-8") == "# server v1"
 
 
+def test_zip_update_dirs_exist_ok_when_directory_deletion_fails(clean_env, tmp_path, monkeypatch):
+    """On Windows, if a folder cannot be deleted due to a transient file lock,
+    shutil.rmtree(..., ignore_errors=True) leaves the folder in place.
+    shutil.copytree with dirs_exist_ok=True must merge/overwrite successfully
+    without throwing FileExistsError."""
+    fake_plugin_root = tmp_path / "zip_plugin_locked"
+    fake_plugin_root.mkdir()
+    (fake_plugin_root / "src").mkdir()
+    (fake_plugin_root / "src" / "server.py").write_text("# server v1", encoding="utf-8")
+    (fake_plugin_root / "plugin.json").write_text(json.dumps({"version": "2.0.0"}), encoding="utf-8")
+
+    monkeypatch.setenv("INVENTOR_MCP_GITHUB_TOKEN", "mock_token")
+    monkeypatch.setattr(updater, "check_for_updates", lambda force=True, plugin_root=None: {
+        "checked": True,
+        "update_available": True,
+        "install_type": "zip",
+        "latest_sha": "new_sha_dirs_exist",
+        "installed_sha": "old_sha",
+        "incoming_commits": ["new_sha_dirs_exist Update"],
+    })
+
+    zip_bytes_io = io.BytesIO()
+    with zipfile.ZipFile(zip_bytes_io, "w") as z:
+        z.writestr("Antniom-LMInventor-plugin-new_sha_dirs_exist/src/server.py", "# server v2 updated")
+        z.writestr("Antniom-LMInventor-plugin-new_sha_dirs_exist/plugin.json", json.dumps({"version": "2.1.0"}))
+    zip_bytes = zip_bytes_io.getvalue()
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.__enter__.return_value = io.BytesIO(zip_bytes)
+        mock_urlopen.return_value = mock_resp
+
+        # Mock shutil.rmtree to be a no-op so the existing destination folder is never deleted
+        monkeypatch.setattr(shutil, "rmtree", lambda path, ignore_errors=False: None)
+        monkeypatch.setattr(updater, "verify_installation", lambda root: (True, "OK"))
+
+        res = updater.update_plugin(confirm=True, plugin_root=str(fake_plugin_root))
+        assert res["success"] is True
+        assert res["action"] == "applied"
+        assert (fake_plugin_root / "src" / "server.py").read_text(encoding="utf-8") == "# server v2 updated"
+
+
+
 
