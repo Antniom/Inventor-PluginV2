@@ -576,32 +576,8 @@ def update_plugin(
                 "reason": "Authentication token required to download zipball for private repository.",
             }
 
-        # Create temporary backup directory of the plugin folder (skipping heavy CAD/media scratch files)
-        backup_dir = tempfile.mkdtemp(prefix="inventor_mcp_backup_")
-        ignored_exts = (
-            ".ipt", ".iam", ".idw", ".dwg", ".step", ".stp", ".sat",
-            ".png", ".jpg", ".jpeg", ".zip", ".log", ".tmp",
-        )
-        ignored_names = {
-            ".git", "__pycache__", ".pytest_cache", ".gemini", "OldVersions", "gen_py",
-        }
-        cad_ignore_filter = shutil.ignore_patterns(
-            "*.ipt", "*.iam", "*.idw", "*.dwg", "*.step", "*.stp", "*.sat",
-            "*.png", "*.jpg", "*.jpeg", "*.zip", "*.log", "*.tmp",
-            "OldVersions", "gen_py", "__pycache__", ".pytest_cache",
-        )
-
-        for item in os.listdir(root):
-            if item in ignored_names or item.lower().endswith(ignored_exts):
-                continue
-            src_item = os.path.join(root, item)
-            dst_item = os.path.join(backup_dir, item)
-            if os.path.isdir(src_item):
-                shutil.copytree(src_item, dst_item, ignore=cad_ignore_filter)
-            elif os.path.isfile(src_item):
-                shutil.copy2(src_item, dst_item)
-
         staging_dir = tempfile.mkdtemp(prefix="inventor_mcp_stage_")
+        backup_dir = tempfile.mkdtemp(prefix="inventor_mcp_backup_")
         zip_path = os.path.join(staging_dir, "release.zip")
 
         try:
@@ -635,50 +611,64 @@ def update_plugin(
                 raise RuntimeError("Extracted archive did not contain expected root directory")
             inner_root = os.path.join(staging_dir, inner_dirs[0])
 
-            # Replace files in root: remove obsolete installed directories/files
-            # while preserving user untracked files (e.g. .mcp.json, .env, *.log)
-            archive_items = set(os.listdir(inner_root))
+            archive_items = set(os.listdir(inner_root)) - {".git", "__pycache__"}
             managed_items = archive_items | {
                 "src", "skills", "docs", "tests", "assets",
                 "plugin.json", "pyproject.toml", "README.md", "LICENSE", "inventor_mcp_server.py"
             }
 
-            for item in os.listdir(root):
-                if item in (".git", "__pycache__", ".pytest_cache", ".gemini", ".mcp.json", ".env"):
-                    continue
-                if item in managed_items and item not in archive_items:
-                    # File/dir deleted upstream
+            # 1. Back up EXACTLY the items the update will overwrite or delete
+            # (managed_items intersected with what exists in plugin root), with NO extension filtering
+            # so tracked files like assets/logo.png are fully preserved.
+            items_to_backup = [item for item in managed_items if os.path.exists(os.path.join(root, item))]
+            for item in items_to_backup:
+                src_item = os.path.join(root, item)
+                dst_item = os.path.join(backup_dir, item)
+                if os.path.isdir(src_item):
+                    shutil.copytree(src_item, dst_item)
+                elif os.path.isfile(src_item):
+                    shutil.copy2(src_item, dst_item)
+
+            # 2. Prune items removed upstream (managed items in root that are no longer in archive)
+            for item in managed_items:
+                if item not in archive_items:
                     d_path = os.path.join(root, item)
                     if os.path.isdir(d_path):
-                        shutil.rmtree(d_path)
+                        shutil.rmtree(d_path, ignore_errors=True)
                     elif os.path.isfile(d_path):
-                        os.remove(d_path)
+                        try:
+                            os.remove(d_path)
+                        except OSError:
+                            pass
 
+            # 3. Copy new / updated archive items into root
             for item in archive_items:
-                if item in (".git", "__pycache__"):
-                    continue
                 s_path = os.path.join(inner_root, item)
                 d_path = os.path.join(root, item)
                 if os.path.isdir(s_path):
                     if os.path.exists(d_path):
-                        shutil.rmtree(d_path)
+                        shutil.rmtree(d_path, ignore_errors=True)
                     shutil.copytree(s_path, d_path)
                 else:
                     shutil.copy2(s_path, d_path)
 
-            # Verification
+            # 4. Verify installation
             ok, verify_msg = verify_installation(root)
             if not ok:
                 _log_err(f"Zip update verification failed ({verify_msg}). Restoring backup...")
-                # Clean current files before restoring backup
-                for item in os.listdir(root):
-                    if item in (".git", "__pycache__", ".pytest_cache", ".gemini", ".mcp.json", ".env"):
-                        continue
+                # Rollback: delete ONLY items in archive_items | managed_items, mirroring the apply step,
+                # and NEVER touch untracked scratch files
+                for item in (archive_items | managed_items):
                     p = os.path.join(root, item)
                     if os.path.isdir(p):
-                        shutil.rmtree(p)
+                        shutil.rmtree(p, ignore_errors=True)
                     elif os.path.isfile(p):
-                        os.remove(p)
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+
+                # Restore exact backed up items
                 for item in os.listdir(backup_dir):
                     s_path = os.path.join(backup_dir, item)
                     d_path = os.path.join(root, item)
@@ -686,6 +676,7 @@ def update_plugin(
                         shutil.copytree(s_path, d_path)
                     else:
                         shutil.copy2(s_path, d_path)
+
                 return {
                     "success": False,
                     "action": "rolled_back",
@@ -716,13 +707,25 @@ def update_plugin(
             }
 
         except Exception as e:
-            # Restore backup on exception
+            # Safe rollback on unexpected exception: delete only managed/archive items, restore backup
+            affected = (
+                (archive_items | managed_items)
+                if "archive_items" in locals() and "managed_items" in locals()
+                else set(os.listdir(backup_dir))
+            )
+            for item in affected:
+                p = os.path.join(root, item)
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                elif os.path.isfile(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
             for item in os.listdir(backup_dir):
                 s_path = os.path.join(backup_dir, item)
                 d_path = os.path.join(root, item)
                 if os.path.isdir(s_path):
-                    if os.path.exists(d_path):
-                        shutil.rmtree(d_path)
                     shutil.copytree(s_path, d_path)
                 else:
                     shutil.copy2(s_path, d_path)

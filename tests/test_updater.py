@@ -577,17 +577,29 @@ def test_connect_raises_when_pywin32_missing(monkeypatch):
     assert "pip install pywin32" in str(exc_info.value)
 
 
-def test_zip_backup_ignores_large_cad_scratch_files(clean_env, tmp_path, monkeypatch):
-    """Zip update backup must skip heavy CAD models (.ipt, .iam) and scratch files."""
+def test_zip_rollback_preserves_untracked_files_and_tracked_assets(clean_env, tmp_path, monkeypatch):
+    """Rollback on verification failure must NEVER delete untracked files
+    (scratch.ipt, render.png, OldVersions/, gen_py/, *.log), and must preserve
+    tracked binary assets (assets/logo.png).
+    """
     fake_plugin_root = tmp_path / "zip_plugin"
     fake_plugin_root.mkdir()
     (fake_plugin_root / "src").mkdir()
-    (fake_plugin_root / "src" / "server.py").write_text("# v1", encoding="utf-8")
+    (fake_plugin_root / "src" / "server.py").write_text("# server v1", encoding="utf-8")
     (fake_plugin_root / "plugin.json").write_text(json.dumps({"version": "2.0.0"}), encoding="utf-8")
-    # Heavy CAD scratch files
-    (fake_plugin_root / "huge_assembly.iam").write_text("dummy binary data", encoding="utf-8")
-    (fake_plugin_root / "heavy_part.ipt").write_text("dummy binary data", encoding="utf-8")
-    (fake_plugin_root / "render.png").write_text("dummy binary data", encoding="utf-8")
+
+    # Tracked asset that should be backed up and preserved
+    (fake_plugin_root / "assets").mkdir()
+    (fake_plugin_root / "assets" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\nfake_logo_data")
+
+    # Untracked files and folders that the update should NEVER touch or wipe
+    (fake_plugin_root / "scratch.ipt").write_bytes(b"inventor_part_binary")
+    (fake_plugin_root / "render.png").write_bytes(b"render_image_binary")
+    (fake_plugin_root / "run.log").write_text("local log lines", encoding="utf-8")
+    (fake_plugin_root / "OldVersions").mkdir()
+    (fake_plugin_root / "OldVersions" / "scratch.0001.ipt").write_bytes(b"old_binary")
+    (fake_plugin_root / "gen_py").mkdir()
+    (fake_plugin_root / "gen_py" / "cache.dat").write_text("com cache", encoding="utf-8")
 
     monkeypatch.setenv("INVENTOR_MCP_GITHUB_TOKEN", "mock_token")
     monkeypatch.setattr(updater, "check_for_updates", lambda force=True, plugin_root=None: {
@@ -599,36 +611,43 @@ def test_zip_backup_ignores_large_cad_scratch_files(clean_env, tmp_path, monkeyp
         "incoming_commits": ["new_sha_999 Release v2.1.0"],
     })
 
-    # Prepare archive
+    # Prepare archive that contains updated code
     zip_bytes_io = io.BytesIO()
     with zipfile.ZipFile(zip_bytes_io, "w") as z:
-        z.writestr("Antniom-LMInventor-plugin-new_sha_999/src/server.py", "# v2")
+        z.writestr("Antniom-LMInventor-plugin-new_sha_999/src/server.py", "# broken server v2")
         z.writestr("Antniom-LMInventor-plugin-new_sha_999/plugin.json", json.dumps({"version": "2.1.0"}))
+        z.writestr("Antniom-LMInventor-plugin-new_sha_999/assets/logo.png", b"\x89PNG\r\n\x1a\nnew_logo_data")
     zip_bytes = zip_bytes_io.getvalue()
-
-    backup_captured_files = []
-
-    orig_copy2 = shutil.copy2
-    def mock_copy2(src, dst, **kwargs):
-        backup_captured_files.append(os.path.basename(src))
-        return orig_copy2(src, dst, **kwargs)
-
-    monkeypatch.setattr(shutil, "copy2", mock_copy2)
-    monkeypatch.setattr(updater, "verify_installation", lambda root: (True, "OK"))
 
     with patch("urllib.request.urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.__enter__.return_value = io.BytesIO(zip_bytes)
         mock_urlopen.return_value = mock_resp
 
-        res = updater.update_plugin(confirm=True, plugin_root=str(fake_plugin_root))
-        assert res["success"] is True
+        # Force a verification failure
+        monkeypatch.setattr(updater, "verify_installation", lambda root: (False, "Corrupted syntax error in update"))
 
-    # Assert that heavy CAD and media files were skipped during backup
-    assert "huge_assembly.iam" not in backup_captured_files
-    assert "heavy_part.ipt" not in backup_captured_files
-    assert "render.png" not in backup_captured_files
-    assert "plugin.json" in backup_captured_files
+        res = updater.update_plugin(confirm=True, plugin_root=str(fake_plugin_root))
+        assert res["success"] is False
+        assert res["action"] == "rolled_back"
+        assert "Backup restored" in res["reason"]
+
+    # Assert that ALL untracked files and folders still exist completely intact
+    assert (fake_plugin_root / "scratch.ipt").exists()
+    assert (fake_plugin_root / "scratch.ipt").read_bytes() == b"inventor_part_binary"
+    assert (fake_plugin_root / "render.png").exists()
+    assert (fake_plugin_root / "render.png").read_bytes() == b"render_image_binary"
+    assert (fake_plugin_root / "run.log").exists()
+    assert (fake_plugin_root / "run.log").read_text(encoding="utf-8") == "local log lines"
+    assert (fake_plugin_root / "OldVersions").exists()
+    assert (fake_plugin_root / "OldVersions" / "scratch.0001.ipt").read_bytes() == b"old_binary"
+    assert (fake_plugin_root / "gen_py").exists()
+    assert (fake_plugin_root / "gen_py" / "cache.dat").read_text(encoding="utf-8") == "com cache"
+
+    # Assert that tracked asset was restored to its original pre-update state
+    assert (fake_plugin_root / "assets" / "logo.png").exists()
+    assert (fake_plugin_root / "assets" / "logo.png").read_bytes() == b"\x89PNG\r\n\x1a\nfake_logo_data"
+    assert (fake_plugin_root / "src" / "server.py").read_text(encoding="utf-8") == "# server v1"
 
 
 
